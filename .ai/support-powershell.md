@@ -1,0 +1,1 @@
+The current PowerShell script in `/scripts/` was converted from a shell script with the same functionality so that it performs the same tasks in a Windows environment. Verify whether it has been converted as intended, and if there are any deficiencies or points of concern, review them and write patch code. Also explain what work was done.
