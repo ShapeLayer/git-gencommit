@@ -11,6 +11,7 @@ add_executable(git-gencommit
   src/main.cpp
   src/cli.cpp
   src/config.cpp
+  src/config_wizard.cpp
   src/toml_lite.cpp
   src/json.cpp
   src/hf.cpp

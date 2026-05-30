@@ -6,6 +6,9 @@ namespace ggc {
 
 struct Options {
   bool has_any_option = false;
+  bool configure = false;
+  std::string download_model;
+  std::string remove_model;
   bool auto_add = false;
   bool commit = false;
   bool push = false;

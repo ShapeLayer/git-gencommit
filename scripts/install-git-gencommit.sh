@@ -26,3 +26,11 @@ echo "Installed: $BIN_DIR/git-gencommit"
 echo "Created startup script: $STARTUP_SCRIPT"
 echo "Add this line to your shell profile (~/.zshrc, ~/.bashrc, etc.):"
 echo "  source ~/bin/git-gencommit-env.sh"
+
+if [ -t 0 ] && [ -t 1 ]; then
+  echo "Launching configuration wizard..."
+  "$BIN_DIR/git-gencommit" config
+else
+  echo "Run this once in a terminal to configure providers:"
+  echo "  git gencommit config"
+fi

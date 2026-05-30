@@ -43,7 +43,10 @@ struct AppPaths {
 
 AppPaths resolve_app_paths();
 void ensure_app_layout(const AppPaths& paths);
+bool app_config_files_exist(const AppPaths& paths);
 Config load_config(const AppPaths& paths);
 ProviderRegistry load_providers(const AppPaths& paths);
+void save_config(const AppPaths& paths, const Config& cfg);
+void save_providers(const AppPaths& paths, const ProviderRegistry& providers);
 
 }  // namespace ggc

@@ -43,3 +43,12 @@ Write-Host "Installed: $Target"
 Write-Host "Created startup script: $StartupScript"
 Write-Host "Add this line to your PowerShell profile (`$PROFILE):"
 Write-Host "  . `"$HOME\bin\git-gencommit-env.ps1`""
+
+if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+    Write-Host "Launching configuration wizard..."
+    & $Target config
+}
+else {
+    Write-Host "Run this once in a terminal to configure providers:"
+    Write-Host "  git gencommit config"
+}

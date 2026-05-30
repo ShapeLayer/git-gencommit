@@ -6,10 +6,14 @@
 
 #include <curl/curl.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <unordered_set>
+#include <vector>
 
 namespace ggc {
 namespace {
@@ -83,6 +87,120 @@ std::string sanitize_commit_title(std::string title) {
     title = trim(title.substr(0, 72));
   }
   return title;
+}
+
+bool contains_ci(const std::string& haystack, const std::string& needle) {
+  if (needle.empty()) {
+    return true;
+  }
+  auto it = std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(),
+                        [](char a, char b) {
+                          return std::tolower(static_cast<unsigned char>(a)) ==
+                                 std::tolower(static_cast<unsigned char>(b));
+                        });
+  return it != haystack.end();
+}
+
+std::string lowercase(const std::string& s) {
+  std::string out = s;
+  std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return out;
+}
+
+std::string basename_no_ext(const std::string& path) {
+  std::string name = path;
+  const size_t slash = name.find_last_of('/');
+  if (slash != std::string::npos) {
+    name = name.substr(slash + 1);
+  }
+  const size_t dot = name.find_last_of('.');
+  if (dot != std::string::npos) {
+    name = name.substr(0, dot);
+  }
+  if (name.empty()) {
+    return "files";
+  }
+  return name;
+}
+
+bool is_command_available(const std::string& command) {
+  if (command.empty()) {
+    return false;
+  }
+
+  if (command.find('/') != std::string::npos) {
+    CommandResult rc = run_command_capture("test -x '" + shell_escape_single(command) + "'");
+    return rc.exit_code == 0;
+  }
+
+  CommandResult rc =
+      run_command_capture("command -v '" + shell_escape_single(command) + "' >/dev/null 2>&1");
+  return rc.exit_code == 0;
+}
+
+std::vector<std::string> changed_files_from_diff(const std::string& staged_diff) {
+  std::vector<std::string> out;
+  std::unordered_set<std::string> seen;
+  std::istringstream iss(staged_diff);
+  std::string line;
+  while (std::getline(iss, line)) {
+    if (line.rfind("+++ b/", 0) == 0) {
+      const std::string path = line.substr(6);
+      if (!path.empty() && path != "/dev/null" && seen.insert(path).second) {
+        out.push_back(path);
+      }
+    }
+  }
+  return out;
+}
+
+std::string builtin_commit_title(const std::string& staged_diff) {
+  const std::vector<std::string> files = changed_files_from_diff(staged_diff);
+  const std::string lowered = lowercase(staged_diff);
+
+  bool docs_only = !files.empty();
+  bool has_test = false;
+  bool has_ci = false;
+  for (const std::string& f : files) {
+    const std::string lf = lowercase(f);
+    if (!(contains_ci(lf, "readme") || contains_ci(lf, "docs/") || contains_ci(lf, ".md"))) {
+      docs_only = false;
+    }
+    if (contains_ci(lf, "test") || contains_ci(lf, "spec")) {
+      has_test = true;
+    }
+    if (contains_ci(lf, ".github/") || contains_ci(lf, "gitlab-ci") || contains_ci(lf, "ci/")) {
+      has_ci = true;
+    }
+  }
+
+  std::string type = "chore";
+  if (docs_only) {
+    type = "docs";
+  } else if (has_test) {
+    type = "test";
+  } else if (has_ci) {
+    type = "ci";
+  } else if (contains_ci(lowered, "fix") || contains_ci(lowered, "bug") ||
+             contains_ci(lowered, "error") || contains_ci(lowered, "fail")) {
+    type = "fix";
+  } else if (contains_ci(staged_diff, "new file mode")) {
+    type = "feat";
+  } else {
+    type = "refactor";
+  }
+
+  std::string summary;
+  if (files.empty()) {
+    summary = "update files";
+  } else if (files.size() == 1) {
+    summary = "update " + basename_no_ext(files.front());
+  } else {
+    summary = "update " + std::to_string(files.size()) + " files";
+  }
+  return sanitize_commit_title(type + ": " + summary);
 }
 
 size_t curl_write_to_string(void* contents, size_t size, size_t nmemb,
@@ -203,6 +321,9 @@ std::string LlmEngine::generate_with_local(const LocalProvider& provider,
   }
 
   std::string cli = provider.llama_cli_path.empty() ? "llama-cli" : provider.llama_cli_path;
+  if (!is_command_available(cli)) {
+    throw std::runtime_error("local runtime not available: llama-cli command not found");
+  }
   std::string cmd =
       "'" + shell_escape_single(cli) + "'"
       " -m '" + shell_escape_single(model_path) + "'"
@@ -241,24 +362,28 @@ std::string LlmEngine::generate_commit_message(const std::string& staged_diff) c
     return generate_with_local(it->second, prompt);
   };
 
-  if (!config_.default_provider.empty()) {
-    if (providers_.external.count(config_.default_provider) != 0) {
-      return use_external(config_.default_provider);
+  try {
+    if (!config_.default_provider.empty()) {
+      if (providers_.external.count(config_.default_provider) != 0) {
+        return use_external(config_.default_provider);
+      }
+      if (providers_.local_models.count(config_.default_provider) != 0) {
+        return use_local(config_.default_provider);
+      }
+      throw std::runtime_error("default_provider not found in providers.toml");
     }
-    if (providers_.local_models.count(config_.default_provider) != 0) {
-      return use_local(config_.default_provider);
+
+    if (!providers_.external.empty()) {
+      return generate_with_external(providers_.external.begin()->second, prompt);
     }
-    throw std::runtime_error("default_provider not found in providers.toml");
-  }
+    if (!providers_.local_models.empty()) {
+      return generate_with_local(providers_.local_models.begin()->second, prompt);
+    }
 
-  if (!providers_.external.empty()) {
-    return generate_with_external(providers_.external.begin()->second, prompt);
+    throw std::runtime_error("no provider configured in providers.toml");
+  } catch (...) {
+    return builtin_commit_title(staged_diff);
   }
-  if (!providers_.local_models.empty()) {
-    return generate_with_local(providers_.local_models.begin()->second, prompt);
-  }
-
-  throw std::runtime_error("no provider configured in providers.toml");
 }
 
 }  // namespace ggc

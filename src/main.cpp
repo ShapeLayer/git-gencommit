@@ -1,6 +1,8 @@
 #include "cli.hpp"
 #include "config.hpp"
+#include "config_wizard.hpp"
 #include "git.hpp"
+#include "hf.hpp"
 #include "llm.hpp"
 
 #include <exception>
@@ -16,6 +18,29 @@ int main(int argc, char** argv) {
       return 0;
     }
 
+    const ggc::AppPaths paths = ggc::resolve_app_paths();
+    const bool has_config_files = ggc::app_config_files_exist(paths);
+
+    if (opt.configure) {
+      ggc::run_config_wizard(paths);
+      return 0;
+    }
+    if (!opt.download_model.empty()) {
+      ggc::ensure_app_layout(paths);
+      const std::string out = ggc::hf_download_model(opt.download_model, paths);
+      std::cout << "[git-gencommit] model downloaded: " << out << "\n";
+      return 0;
+    }
+    if (!opt.remove_model.empty()) {
+      ggc::ensure_app_layout(paths);
+      const std::string out = ggc::hf_remove_model(opt.remove_model, paths);
+      std::cout << "[git-gencommit] model removed: " << out << "\n";
+      return 0;
+    }
+    if (!has_config_files) {
+      ggc::run_config_wizard(paths);
+    }
+
     std::unique_ptr<ggc::LlmEngine> llm;
 
     // Execution order is fixed regardless of input option order: -a, -c, -p.
@@ -29,7 +54,6 @@ int main(int argc, char** argv) {
     }
 
     if (opt.commit) {
-      const ggc::AppPaths paths = ggc::resolve_app_paths();
       ggc::ensure_app_layout(paths);
       const ggc::Config cfg = ggc::load_config(paths);
       const ggc::ProviderRegistry providers = ggc::load_providers(paths);

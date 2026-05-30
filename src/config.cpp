@@ -2,11 +2,13 @@
 
 #include "toml_lite.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace ggc {
 namespace fs = std::filesystem;
@@ -22,12 +24,19 @@ std::string read_file(const std::string& path) {
                      std::istreambuf_iterator<char>());
 }
 
+void write_text_file(const std::string& path, const std::string& content) {
+  std::ofstream ofs(path, std::ios::out | std::ios::trunc);
+  if (!ofs.is_open()) {
+    throw std::runtime_error("failed to open file for writing: " + path);
+  }
+  ofs << content;
+}
+
 void write_if_missing(const std::string& path, const std::string& content) {
   if (fs::exists(path)) {
     return;
   }
-  std::ofstream ofs(path, std::ios::out | std::ios::trunc);
-  ofs << content;
+  write_text_file(path, content);
 }
 
 bool to_bool(const std::string& s, bool fallback) {
@@ -51,6 +60,36 @@ int to_int(const std::string& s, int fallback) {
     return fallback;
   }
   return v;
+}
+
+std::string bool_to_toml(bool v) {
+  return v ? "true" : "false";
+}
+
+std::string toml_safe(const std::string& in) {
+  std::string out;
+  out.reserve(in.size());
+  for (char c : in) {
+    if (c == '\n' || c == '\r') {
+      out.push_back(' ');
+    } else if (c == '"') {
+      out.push_back('\'');
+    } else {
+      out.push_back(c);
+    }
+  }
+  return out;
+}
+
+template <typename T>
+std::vector<std::string> sorted_keys(const std::unordered_map<std::string, T>& map) {
+  std::vector<std::string> keys;
+  keys.reserve(map.size());
+  for (const auto& kv : map) {
+    keys.push_back(kv.first);
+  }
+  std::sort(keys.begin(), keys.end());
+  return keys;
 }
 
 }  // namespace
@@ -103,6 +142,10 @@ void ensure_app_layout(const AppPaths& paths) {
   write_if_missing(paths.providers_toml, default_providers);
 }
 
+bool app_config_files_exist(const AppPaths& paths) {
+  return fs::exists(paths.config_toml) && fs::exists(paths.providers_toml);
+}
+
 Config load_config(const AppPaths& paths) {
   Config cfg;
   const std::string raw = read_file(paths.config_toml);
@@ -148,6 +191,62 @@ ProviderRegistry load_providers(const AppPaths& paths) {
   }
 
   return pr;
+}
+
+void save_config(const AppPaths& paths, const Config& cfg) {
+  std::ostringstream oss;
+  oss << "[app]\n";
+  oss << "run_on_startup = " << bool_to_toml(cfg.run_on_startup) << "\n";
+  oss << "unload_after_commit = " << bool_to_toml(cfg.unload_after_commit) << "\n";
+  oss << "\n";
+  oss << "[commit]\n";
+  oss << "template = \"" << toml_safe(cfg.commit_template) << "\"\n";
+  oss << "default_provider = \"" << toml_safe(cfg.default_provider) << "\"\n";
+  oss << "auto_download_models = " << bool_to_toml(cfg.auto_download_models) << "\n";
+  write_text_file(paths.config_toml, oss.str());
+}
+
+void save_providers(const AppPaths& paths, const ProviderRegistry& providers) {
+  std::ostringstream oss;
+
+  const std::vector<std::string> local_keys = sorted_keys(providers.local_models);
+  const std::vector<std::string> external_keys = sorted_keys(providers.external);
+
+  if (local_keys.empty() && external_keys.empty()) {
+    oss << "# No providers configured yet.\n";
+    write_text_file(paths.providers_toml, oss.str());
+    return;
+  }
+
+  for (const std::string& key : local_keys) {
+    const auto it = providers.local_models.find(key);
+    if (it == providers.local_models.end()) {
+      continue;
+    }
+    const LocalProvider& lp = it->second;
+    oss << "[local." << key << "]\n";
+    oss << "model_name = \"" << toml_safe(lp.model_name) << "\"\n";
+    oss << "model_path = \"" << toml_safe(lp.model_path) << "\"\n";
+    oss << "llama_cli_path = \"" << toml_safe(lp.llama_cli_path) << "\"\n";
+    oss << "\n";
+  }
+
+  for (const std::string& key : external_keys) {
+    const auto it = providers.external.find(key);
+    if (it == providers.external.end()) {
+      continue;
+    }
+    const ExternalProvider& ep = it->second;
+    oss << "[external." << key << "]\n";
+    oss << "base_url = \"" << toml_safe(ep.base_url) << "\"\n";
+    oss << "model = \"" << toml_safe(ep.model) << "\"\n";
+    oss << "api_key = \"" << toml_safe(ep.api_key) << "\"\n";
+    oss << "timeout_sec = " << ep.timeout_sec << "\n";
+    oss << "max_retries = " << ep.max_retries << "\n";
+    oss << "\n";
+  }
+
+  write_text_file(paths.providers_toml, oss.str());
 }
 
 }  // namespace ggc
