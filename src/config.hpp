@@ -36,6 +36,7 @@ struct AppPaths {
   std::string home;
   std::string root;
   std::string models_dir;
+  std::string runtime_dir;
   std::string config_toml;
   std::string providers_toml;
   std::string cache_dir;

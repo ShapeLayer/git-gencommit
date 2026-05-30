@@ -103,6 +103,7 @@ AppPaths resolve_app_paths() {
   paths.home = home_c;
   paths.root = paths.home + "/.gitgencommit";
   paths.models_dir = paths.root + "/models";
+  paths.runtime_dir = paths.root + "/runtime";
   paths.config_toml = paths.root + "/config.toml";
   paths.providers_toml = paths.root + "/providers.toml";
   paths.cache_dir = paths.root + "/cache";
@@ -111,6 +112,7 @@ AppPaths resolve_app_paths() {
 
 void ensure_app_layout(const AppPaths& paths) {
   fs::create_directories(paths.models_dir);
+  fs::create_directories(paths.runtime_dir);
   fs::create_directories(paths.cache_dir);
 
   const std::string default_config =

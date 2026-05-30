@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config.hpp"
+#include "git.hpp"
 
 #include <string>
 
@@ -13,10 +14,10 @@ class LlmEngine {
   void load_if_needed();
   void unload_if_needed();
 
-  std::string generate_commit_message(const std::string& staged_diff) const;
+  std::string generate_commit_message(const StagedChangeContext& context) const;
 
  private:
-  std::string build_prompt(const std::string& staged_diff) const;
+  std::string build_prompt(const StagedChangeContext& context) const;
   std::string generate_with_external(const ExternalProvider& provider,
                                      const std::string& prompt) const;
   std::string generate_with_local(const LocalProvider& provider,

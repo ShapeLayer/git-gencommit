@@ -61,13 +61,13 @@ int main(int argc, char** argv) {
       llm->load_if_needed();
 
       std::cout << "[git-gencommit] generating commit message with LLM\n";
-      std::string diff;
+      ggc::StagedChangeContext context;
       if (opt.dry_run && opt.auto_add) {
-        diff = ggc::git_virtual_staged_diff_all();
+        context = ggc::git_virtual_staged_context_all();
       } else {
-        diff = ggc::git_staged_diff();
+        context = ggc::git_staged_context();
       }
-      const std::string message = llm->generate_commit_message(diff);
+      const std::string message = llm->generate_commit_message(context);
       if (opt.print_message || opt.dry_run) {
         std::cout << "[git-gencommit] generated title: " << message << "\n";
       }
