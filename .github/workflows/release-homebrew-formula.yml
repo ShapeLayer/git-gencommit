@@ -1,0 +1,147 @@
+name: Update Homebrew Formula on Release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+jobs:
+  update-formula:
+    name: Update formula in ${{ matrix.target_repo }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target_repo:
+          - ShapeLayer/homebrew-tap
+          - ShapeLayer/homebrew-git-gencommit
+    env:
+      APP_REPO: ShapeLayer/git-gencommit
+      FORMULA_NAME: git-gencommit.rb
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+
+      - name: Prepare release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name }}"
+          TAR_URL="https://github.com/${APP_REPO}/archive/refs/tags/${TAG}.tar.gz"
+          TAR_PATH="/tmp/git-gencommit-${TAG}.tar.gz"
+
+          curl -fsSL "$TAR_URL" -o "$TAR_PATH"
+          SHA256="$(sha256sum "$TAR_PATH" | awk '{print $1}')"
+
+          {
+            echo "tag=$TAG"
+            echo "tar_url=$TAR_URL"
+            echo "sha256=$SHA256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate formula file
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "/tmp/${FORMULA_NAME}" <<EOF
+          class GitGencommit < Formula
+            desc "Generate Git commit messages with LLMs and run add/commit/push"
+            homepage "https://github.com/ShapeLayer/git-gencommit"
+            url "${{ steps.meta.outputs.tar_url }}"
+            sha256 "${{ steps.meta.outputs.sha256 }}"
+            license "MIT"
+            head "https://github.com/ShapeLayer/git-gencommit.git", branch: "main"
+
+            depends_on "cmake" => :build
+            depends_on "curl"
+
+            def install
+              ENV["HOME"] = buildpath
+              system "bash", "scripts/install-git-gencommit.sh"
+
+              bin.install buildpath/"bin/git-gencommit"
+            end
+
+            def caveats
+              <<~EOS
+                git-gencommit installation is complete.
+
+                Run this command to complete interactive configuration:
+                  git gencommit config
+              EOS
+            end
+
+            test do
+              output = shell_output("git gencommit -h")
+              assert_match "Usage:", output
+              assert_match "--print-message", output
+            end
+          end
+          EOF
+
+      - name: Checkout target tap repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.target_repo }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap-repo
+
+      - name: Update formula and create PR
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BRANCH="chore/update-git-gencommit-${{ steps.meta.outputs.tag }}"
+          TITLE="chore(formula): update git-gencommit to ${{ steps.meta.outputs.tag }}"
+
+          EXISTING_PR="$(gh pr list \
+            --repo "${{ matrix.target_repo }}" \
+            --head "$BRANCH" \
+            --state open \
+            --json number \
+            --jq '.[0].number')"
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "PR #$EXISTING_PR already exists for ${{ matrix.target_repo }}"
+            exit 0
+          fi
+
+          cp "/tmp/${FORMULA_NAME}" "tap-repo/Formula/${FORMULA_NAME}"
+
+          if git -C tap-repo diff --quiet -- "Formula/${FORMULA_NAME}"; then
+            echo "No formula change for ${{ matrix.target_repo }}"
+            exit 0
+          fi
+
+          git -C tap-repo config user.name "github-actions[bot]"
+          git -C tap-repo config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git -C tap-repo ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git -C tap-repo fetch origin "$BRANCH"
+            git -C tap-repo checkout -B "$BRANCH" "origin/$BRANCH"
+          else
+            git -C tap-repo checkout -b "$BRANCH"
+          fi
+
+          git -C tap-repo add "Formula/${FORMULA_NAME}"
+          git -C tap-repo commit -m "$TITLE"
+          git -C tap-repo push --set-upstream origin "$BRANCH"
+
+          gh pr create \
+            --repo "${{ matrix.target_repo }}" \
+            --base main \
+            --head "$BRANCH" \
+            --title "$TITLE" \
+            --body "$(cat <<'PR_BODY'
+          Automated Homebrew formula update triggered by release `${{ steps.meta.outputs.tag }}`.
+
+          - Source tarball: `${{ steps.meta.outputs.tar_url }}`
+          - SHA256: `${{ steps.meta.outputs.sha256 }}`
+          PR_BODY
+          )"
